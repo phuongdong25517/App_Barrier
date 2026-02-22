@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "BARRIER",
+    "slug": "barrier-app",
+    "version": "1.0.0",
+    "sdkVersion": "51.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
+    "splash": {
+      "backgroundColor": "#0a0e14"
+    },
+    "android": {
+      "package": "com.barrier.app",
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "scheme": "barrier"
+  }
+}

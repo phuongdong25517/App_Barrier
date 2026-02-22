@@ -1,0 +1,80 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:  # Cho phép chạy thủ công từ GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Install Expo CLI
+        run: npm install -g @expo/cli@latest
+
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --clean
+        env:
+          EXPO_NO_TELEMETRY: 1
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build Release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: barrier-app-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+      - name: Create Release with APK
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "BARRIER App v${{ github.run_number }}"
+          body: |
+            ## 📱 BARRIER App - Android APK
+            
+            ### Cách cài đặt:
+            1. Tải file `app-release.apk` bên dưới
+            2. Bật **Unknown Sources** trên Android (Settings → Security)
+            3. Mở file APK → Install
+            4. Pair HC-05 trong Android Settings → Bluetooth trước
+            5. Mở app BARRIER → CONNECT
+            
+            > Build tự động bởi GitHub Actions
+          files: android/app/build/outputs/apk/release/app-release.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
