@@ -1,97 +1,115 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
+import { useLanguage } from '../context/LanguageContext';
 import { Card, DataRow, Toggle } from '../components';
 import { useBluetooth } from '../context/BluetoothContext';
 
 export default function AppSettingScreen() {
   const { Colors, isDark, setIsDark } = useTheme();
+  const { t, lang, setLang } = useLanguage();
   const { connected, inforData, writeParam } = useBluetooth();
 
   const handleMainLock = () => {
-    Alert.alert(
-      '🔐 Xác nhận MAIN LOCK',
-      'Bạn có chắc muốn khóa mainboard?\n\nThiết bị sẽ không hoạt động cho đến khi mở khóa.',
-      [
-        { text: 'Hủy', style: 'cancel' },
-        { text: 'XÁC NHẬN KHÓA', style: 'destructive', onPress: () => writeParam('MAINLOCK', 1) },
-      ]
-    );
+    Alert.alert(t.confirmLock, t.confirmLockMsg, [
+      { text: t.cancel, style: 'cancel' },
+      { text: t.confirm, style: 'destructive', onPress: () => writeParam('MAINLOCK', 1) },
+    ]);
   };
 
   const handleResetFactory = () => {
-    Alert.alert(
-      '⚠ Reset Factory',
-      'Toàn bộ thông số sẽ về mặc định. Tiếp tục?',
-      [
-        { text: 'Hủy', style: 'cancel' },
-        { text: 'Reset', style: 'destructive', onPress: () => writeParam('RESET_FACTORY', 1) },
-      ]
-    );
+    Alert.alert('⚠ Reset', t.confirmReset, [
+      { text: t.cancel, style: 'cancel' },
+      { text: t.reset, style: 'destructive', onPress: () => writeParam('RESET_FACTORY', 1) },
+    ]);
   };
 
   return (
-    <ScrollView
-      style={[styles.container, { backgroundColor: Colors.bg }]}
-      contentContainerStyle={styles.content}
-    >
+    <ScrollView style={[styles.container, { backgroundColor: Colors.bg }]} contentContainerStyle={styles.content}>
+
+      {/* App Info */}
       <Card>
-        <Text style={[styles.sectionHeader, { color: Colors.muted }]}>THÔNG TIN ỨNG DỤNG</Text>
-        <DataRow label="Tên App" value="Barrier Gen2" />
-        <DataRow label="Phiên bản" value="1.0.0" />
-        <DataRow label="Giao thức" value="BT Classic HC-05" />
-        <DataRow label="Baud Rate" value="9600" unit="bps" />
+        <Text style={[styles.sh, { color: Colors.muted }]}>{t.appInfo}</Text>
+        <DataRow label={t.appVersion} value="1.0.0" />
+        <DataRow label={t.protocol} value="BT Classic HC-05" />
+        <DataRow label={t.baudRate} value="9600" unit="bps" />
       </Card>
 
+      {/* Device Info */}
       <Card>
-        <Text style={[styles.sectionHeader, { color: Colors.muted }]}>THÔNG TIN THIẾT BỊ</Text>
-        <DataRow label="Firmware" value={inforData.firmware} />
+        <Text style={[styles.sh, { color: Colors.muted }]}>{t.deviceInfo}</Text>
+        <DataRow label={t.firmware} value={inforData.firmware} />
         <DataRow label="Serial" value={inforData.serial} />
         <DataRow label="Device" value={inforData.device} />
-        <DataRow label="Odometer" value={inforData.odometer} unit="h" />
-        <DataRow label="Mode" value={inforData.mode} />
-        {inforData.error ? <DataRow label="Error" value={inforData.error} /> : null}
+        <DataRow label={t.odometer} value={inforData.odometer} unit="h" />
+        <DataRow label={t.mode} value={inforData.mode} />
+        {inforData.error ? <DataRow label={t.error} value={inforData.error} /> : null}
       </Card>
 
-      {/* Display Settings - Dark/Light mode WORKS now */}
+      {/* Language Toggle */}
       <Card>
-        <Text style={[styles.sectionHeader, { color: Colors.muted }]}>CÀI ĐẶT HIỂN THỊ</Text>
+        <Text style={[styles.sh, { color: Colors.muted }]}>{t.language}</Text>
+        <View style={styles.langRow}>
+          <TouchableOpacity
+            onPress={() => setLang('vi')}
+            style={[styles.langBtn, {
+              backgroundColor: lang === 'vi' ? `${Colors.accent}22` : Colors.border,
+              borderColor: lang === 'vi' ? Colors.accent : 'transparent',
+            }]}
+          >
+            <Text style={[styles.langBtnText, { color: lang === 'vi' ? Colors.accent : Colors.muted }]}>
+              🇻🇳  Tiếng Việt
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setLang('en')}
+            style={[styles.langBtn, {
+              backgroundColor: lang === 'en' ? `${Colors.accent}22` : Colors.border,
+              borderColor: lang === 'en' ? Colors.accent : 'transparent',
+            }]}
+          >
+            <Text style={[styles.langBtnText, { color: lang === 'en' ? Colors.accent : Colors.muted }]}>
+              🇬🇧  English
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </Card>
+
+      {/* Display */}
+      <Card>
+        <Text style={[styles.sh, { color: Colors.muted }]}>{t.displaySettings}</Text>
         <View style={styles.settingRow}>
           <View>
-            <Text style={[styles.settingLabel, { color: Colors.text }]}>Chế độ tối (Dark Mode)</Text>
+            <Text style={[styles.settingLabel, { color: Colors.text }]}>{t.darkMode}</Text>
             <Text style={[styles.settingHint, { color: Colors.muted }]}>
-              {isDark ? '🌙 Đang dùng chế độ tối' : '☀️ Đang dùng chế độ sáng'}
+              {isDark ? t.darkOn : t.darkOff}
             </Text>
           </View>
           <Toggle value={isDark} onToggle={setIsDark} />
         </View>
       </Card>
 
+      {/* System */}
       <Card>
-        <Text style={[styles.sectionHeader, { color: Colors.muted }]}>HỆ THỐNG</Text>
-        <TouchableOpacity
-          style={[styles.sysBtn, { backgroundColor: Colors.border }]}
-          onPress={handleResetFactory}
-        >
-          <Text style={[styles.sysBtnText, { color: Colors.muted }]}>🔄  RESET VỀ MẶC ĐỊNH</Text>
+        <Text style={[styles.sh, { color: Colors.muted }]}>{t.system}</Text>
+        <TouchableOpacity style={[styles.sysBtn, { backgroundColor: Colors.border }]} onPress={handleResetFactory}>
+          <Text style={[styles.sysBtnText, { color: Colors.muted }]}>{t.resetFactory}</Text>
         </TouchableOpacity>
       </Card>
 
       {/* Main Lock */}
       <View style={[styles.lockCard, { borderColor: Colors.red, backgroundColor: `${Colors.red}0d` }]}>
-        <Text style={[styles.sectionHeader, { color: Colors.red }]}>MAIN LOCK</Text>
-        <Text style={[styles.lockDesc, { color: Colors.muted }]}>
-          Khóa mainboard. Thiết bị sẽ bị vô hiệu hóa cho đến khi mở khóa. Sử dụng cẩn thận.
-        </Text>
+        <Text style={[styles.sh, { color: Colors.red }]}>{t.mainLock}</Text>
+        <Text style={[styles.lockDesc, { color: Colors.muted }]}>{t.mainLockDesc}</Text>
         <TouchableOpacity
           style={[styles.lockBtn, {
             backgroundColor: connected ? `${Colors.red}22` : Colors.card,
             borderColor: connected ? Colors.red : Colors.border,
           }]}
-          onPress={connected ? handleMainLock : () => Alert.alert('Chưa kết nối', 'Kết nối HC-05 để dùng tính năng này')}
+          onPress={connected ? handleMainLock : () => Alert.alert(t.notConnectedAlert, t.connectFirst)}
         >
           <Text style={[styles.lockBtnText, { color: connected ? Colors.red : Colors.muted }]}>
-            🔐  MAIN LOCK
+            {t.mainLockBtn}
           </Text>
         </TouchableOpacity>
       </View>
@@ -102,7 +120,10 @@ export default function AppSettingScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { padding: 14, gap: 12 },
-  sectionHeader: { fontSize: 9, fontFamily: 'monospace', letterSpacing: 2, marginBottom: 10 },
+  sh: { fontSize: 9, fontFamily: 'monospace', letterSpacing: 2, marginBottom: 10 },
+  langRow: { flexDirection: 'row', gap: 10 },
+  langBtn: { flex: 1, borderWidth: 1.5, borderRadius: 10, padding: 12, alignItems: 'center' },
+  langBtnText: { fontSize: 13, fontWeight: '600' },
   settingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   settingLabel: { fontSize: 13 },
   settingHint: { fontSize: 10, marginTop: 2 },
