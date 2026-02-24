@@ -17,7 +17,7 @@ function ParamRow({ label, param, value, children, onRead, onWrite }) {
       <View style={styles.paramTop}>
         <View style={styles.paramInfo}>
           <Text style={[styles.paramLabel, { color: Colors.text }]}>{label}</Text>
-          <Text style={[styles.paramCode, { color: Colors.muted }]}>{param}</Text>
+          
         </View>
         <View style={styles.paramBtns}>
           <TouchableOpacity onPress={onRead}

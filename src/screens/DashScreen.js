@@ -8,7 +8,7 @@ import { useBluetooth } from '../context/BluetoothContext';
 export default function DashScreen() {
   const { Colors } = useTheme();
   const { t } = useLanguage();
-  const { connected, bmsData, driverData, signals, writeParam, inforData } = useBluetooth();
+  const { connected, bmsData, driverData, signals, writeParam, readParam } = useBluetooth();
   const [lastCmd, setLastCmd] = useState(null);
   const [closeSpeed, setCloseSpeed] = useState(15);
   const [openSpeed, setOpenSpeed] = useState(15);
@@ -23,9 +23,7 @@ export default function DashScreen() {
   const onLearningRemote = () => {
     if (!connected) { Alert.alert(t.notConnectedAlert, t.connectFirst); return; }
     writeParam('REMOTE', 0);
-    Alert.alert('Learning Remote', t.lang === 'vi'
-      ? 'Đã gửi lệnh! Nhấn nút remote trong vòng 10 giây.'
-      : 'Command sent! Press remote button within 10 seconds.');
+    Alert.alert('Learning Remote', '✓ Đã gửi lệnh! Nhấn nút remote trong 10 giây.');
   };
 
   return (
@@ -49,13 +47,17 @@ export default function DashScreen() {
         <SectionHeader title={t.controls} />
         <View style={styles.controls}>
           <ActionBtn label={t.power} iconSource={require('../../assets/icons/icon_power.png')}
-            color={Colors.green} size="lg" disabled={!connected} onPress={() => sendCmd(t.power, 'RUN_CMD', 1)} />
+            color={Colors.green} size="lg" disabled={!connected}
+            onPress={() => sendCmd(t.power, 'RUN_CMD', 1)} />
           <ActionBtn label={t.stop} iconSource={require('../../assets/icons/icon_stop.png')}
-            color={Colors.red} size="lg" disabled={!connected} onPress={() => sendCmd(t.stop, 'RUN_CMD', 3)} />
+            color={Colors.red} size="lg" disabled={!connected}
+            onPress={() => sendCmd(t.stop, 'RUN_CMD', 3)} />
           <ActionBtn label={t.close} iconSource={require('../../assets/icons/icon_backward.png')}
-            color={Colors.orange} size="lg" disabled={!connected} onPress={() => sendCmd(t.close, 'RUN_CMD', 2)} />
+            color={Colors.orange} size="lg" disabled={!connected}
+            onPress={() => sendCmd(t.close, 'RUN_CMD', 2)} />
           <ActionBtn label={t.open} iconSource={require('../../assets/icons/icon_forward.png')}
-            color={Colors.accent} size="lg" disabled={!connected} onPress={() => sendCmd(t.open, 'RUN_CMD', 4)} />
+            color={Colors.accent} size="lg" disabled={!connected}
+            onPress={() => sendCmd(t.open, 'RUN_CMD', 4)} />
         </View>
         {lastCmd
           ? <Text style={[styles.cmdFeedback, { color: Colors.green }]}>{t.cmdSent}{lastCmd}</Text>
@@ -91,32 +93,38 @@ export default function DashScreen() {
         </DataCard>
       </View>
 
-      {/* Quick Speed */}
+      {/* Quick Speed - READ + WRITE buttons, no param code text */}
       <Card style={styles.mb12}>
         <SectionHeader title={t.quickSpeed} />
+
+        {/* Close Speed */}
         <View style={[styles.speedRow, { borderBottomColor: Colors.border }]}>
-          <View style={styles.speedInfo}>
-            <Text style={[styles.speedLabel, { color: Colors.text }]}>{t.closeSpeed}</Text>
-            <Text style={[styles.speedParam, { color: Colors.muted }]}>CLOSE_SPEED</Text>
-          </View>
+          <Text style={[styles.speedLabel, { color: Colors.text }]}>{t.closeSpeed}</Text>
           <View style={styles.speedRight}>
             <Stepper value={closeSpeed} min={0} max={95} unit="%" onChangeValue={setCloseSpeed} />
-            <TouchableOpacity style={[styles.sendBtn, { backgroundColor: `${Colors.orange}22`, borderColor: Colors.orange }]}
+            <TouchableOpacity style={[styles.rwBtn, { backgroundColor: `${Colors.accentDim}22`, borderColor: Colors.accentDim }]}
+              onPress={() => readParam('CLOSE_SPEED')}>
+              <Text style={[styles.rwTxt, { color: Colors.accentDim }]}>{t.read}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.rwBtn, { backgroundColor: `${Colors.green}22`, borderColor: Colors.green }]}
               onPress={() => connected ? writeParam('CLOSE_SPEED', closeSpeed) : null}>
-              <Text style={[styles.sendBtnText, { color: Colors.orange }]}>{t.send}</Text>
+              <Text style={[styles.rwTxt, { color: Colors.green }]}>{t.write}</Text>
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Open Speed */}
         <View style={[styles.speedRow, { borderBottomColor: 'transparent' }]}>
-          <View style={styles.speedInfo}>
-            <Text style={[styles.speedLabel, { color: Colors.text }]}>{t.openSpeed}</Text>
-            <Text style={[styles.speedParam, { color: Colors.muted }]}>OPEN_SPEED</Text>
-          </View>
+          <Text style={[styles.speedLabel, { color: Colors.text }]}>{t.openSpeed}</Text>
           <View style={styles.speedRight}>
             <Stepper value={openSpeed} min={0} max={95} unit="%" onChangeValue={setOpenSpeed} />
-            <TouchableOpacity style={[styles.sendBtn, { backgroundColor: `${Colors.accent}22`, borderColor: Colors.accent }]}
+            <TouchableOpacity style={[styles.rwBtn, { backgroundColor: `${Colors.accentDim}22`, borderColor: Colors.accentDim }]}
+              onPress={() => readParam('OPEN_SPEED')}>
+              <Text style={[styles.rwTxt, { color: Colors.accentDim }]}>{t.read}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.rwBtn, { backgroundColor: `${Colors.green}22`, borderColor: Colors.green }]}
               onPress={() => connected ? writeParam('OPEN_SPEED', openSpeed) : null}>
-              <Text style={[styles.sendBtnText, { color: Colors.accent }]}>{t.send}</Text>
+              <Text style={[styles.rwTxt, { color: Colors.green }]}>{t.write}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -137,10 +145,8 @@ const styles = StyleSheet.create({
   learnBtnText: { fontWeight: '700', letterSpacing: 2, fontSize: 13 },
   dataRow: { flexDirection: 'row', marginBottom: 12 },
   speedRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, gap: 8 },
-  speedInfo: { flex: 1 },
-  speedLabel: { fontSize: 12 },
-  speedParam: { fontSize: 9, fontFamily: 'monospace', marginTop: 1 },
-  speedRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sendBtn: { borderWidth: 1.5, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
-  sendBtnText: { fontSize: 10, fontWeight: '700', letterSpacing: 1 },
+  speedLabel: { fontSize: 12, flex: 1 },
+  speedRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rwBtn: { borderWidth: 1.5, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  rwTxt: { fontSize: 9, fontWeight: '700', letterSpacing: 1 },
 });

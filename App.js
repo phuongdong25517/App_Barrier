@@ -9,11 +9,12 @@ import OtaScreen from './src/screens/OtaScreen';
 import AppSettingScreen from './src/screens/AppSettingScreen';
 import BluetoothModal from './src/components/BluetoothModal';
 
+// All tabs use same structure - icon image OR text icon, same size
 const TABS = [
-  { id: 0, labelKey: 'DASH', icon: '◉' },
-  { id: 1, labelKey: 'SET', icon: '⚙' },
-  { id: 2, labelKey: 'OTA', icon: '↑' },
-  { id: 3, labelKey: 'APP', image: require('./assets/icons/icon_app.png') },
+  { id: 0, label: 'DASH', icon: '◉' },
+  { id: 1, label: 'SET',  icon: '⚙' },
+  { id: 2, label: 'OTA',  icon: '↑' },
+  { id: 3, label: 'APP',  image: require('./assets/icons/icon_app.png') },
 ];
 
 function Header({ onConnectPress }) {
@@ -24,7 +25,6 @@ function Header({ onConnectPress }) {
     <View style={[styles.header, { backgroundColor: Colors.surface, borderBottomColor: Colors.border }]}>
       <View style={styles.headerLeft}>
         <Text style={[styles.headerTitle, { color: Colors.accent }]}>{t.appName}</Text>
-        {/* Firmware version thay cho "GEN2 MAINBOARD" */}
         <Text style={[styles.headerSub, { color: Colors.muted }]}>
           FW: {inforData?.firmware || '--'}
         </Text>
@@ -36,11 +36,7 @@ function Header({ onConnectPress }) {
         }]}
         onPress={onConnectPress}
       >
-        <View style={[styles.dot, {
-          backgroundColor: connected ? Colors.green : Colors.muted,
-          shadowColor: connected ? Colors.green : 'transparent',
-          shadowOpacity: connected ? 1 : 0, shadowRadius: 4,
-        }]} />
+        <View style={[styles.dot, { backgroundColor: connected ? Colors.green : Colors.muted }]} />
         <Text style={[styles.connectText, { color: connected ? Colors.green : Colors.muted }]}>
           {connected ? (connectedDevice?.name || t.connected) : t.connect}
         </Text>
@@ -67,20 +63,29 @@ function AppContent() {
         {activeTab === 3 && <AppSettingScreen />}
       </View>
 
+      {/* Bottom Nav - all items same height/alignment */}
       <View style={[styles.navbar, { backgroundColor: Colors.surface, borderTopColor: Colors.border }]}>
-        {TABS.map(tab => (
-          <TouchableOpacity
-            key={tab.id}
-            onPress={() => setActiveTab(tab.id)}
-            style={[styles.navItem, { borderTopColor: activeTab === tab.id ? Colors.accent : 'transparent' }]}
-          >
-            {tab.image
-              ? <Image source={tab.image} style={[styles.navImage, { tintColor: activeTab === tab.id ? Colors.accent : Colors.muted }]} />
-              : <Text style={[styles.navIcon, { color: activeTab === tab.id ? Colors.accent : Colors.muted }]}>{tab.icon}</Text>
-            }
-            <Text style={[styles.navLabel, { color: activeTab === tab.id ? Colors.accent : Colors.muted }]}>{tab.labelKey}</Text>
-          </TouchableOpacity>
-        ))}
+        {TABS.map(tab => {
+          const active = activeTab === tab.id;
+          return (
+            <TouchableOpacity key={tab.id} onPress={() => setActiveTab(tab.id)}
+              style={[styles.navItem, { borderTopColor: active ? Colors.accent : 'transparent' }]}>
+              <View style={styles.navIconBox}>
+                {tab.image
+                  ? <Image source={tab.image}
+                      style={[styles.navImage, { tintColor: active ? Colors.accent : Colors.muted }]}
+                      resizeMode="contain" />
+                  : <Text style={[styles.navIcon, { color: active ? Colors.accent : Colors.muted }]}>
+                      {tab.icon}
+                    </Text>
+                }
+              </View>
+              <Text style={[styles.navLabel, { color: active ? Colors.accent : Colors.muted }]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <BluetoothModal visible={showBt} onClose={() => setShowBt(false)} />
@@ -111,8 +116,9 @@ const styles = StyleSheet.create({
   connectText: { fontSize: 11, fontWeight: '700', letterSpacing: 1 },
   screenContainer: { flex: 1 },
   navbar: { borderTopWidth: 1, flexDirection: 'row', paddingBottom: 8, paddingTop: 4 },
-  navItem: { flex: 1, alignItems: 'center', paddingTop: 8, gap: 3, borderTopWidth: 2 },
-  navIcon: { fontSize: 18 },
-  navImage: { width: 20, height: 20 },
+  navItem: { flex: 1, alignItems: 'center', paddingTop: 8, borderTopWidth: 2 },
+  navIconBox: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', marginBottom: 3 },
+  navIcon: { fontSize: 18, lineHeight: 24, textAlignVertical: 'center' },
+  navImage: { width: 22, height: 22 },
   navLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 1 },
 });
