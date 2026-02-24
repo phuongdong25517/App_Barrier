@@ -1,22 +1,38 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { Colors } from '../theme';
+import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import { useTheme } from '../context/ThemeContext';
 
 // ─── Status Light ──────────────────────────────────────────────
 export function StatusLight({ label, active }) {
+  const { Colors } = useTheme();
   return (
     <View style={styles.lightWrapper}>
-      <View style={[styles.light, active ? styles.lightOn : styles.lightOff]} />
-      <Text style={styles.lightLabel}>{label}</Text>
+      <View style={[
+        styles.light,
+        { backgroundColor: active ? Colors.green : '#1a1a1a',
+          borderColor: active ? Colors.green : '#333',
+          shadowColor: active ? Colors.green : 'transparent',
+          shadowOpacity: active ? 0.9 : 0,
+          shadowRadius: active ? 6 : 0,
+          elevation: active ? 4 : 0,
+        }
+      ]} />
+      <Text style={[styles.lightLabel, { color: Colors.muted }]}>{label}</Text>
     </View>
   );
 }
 
 // ─── Data Card ─────────────────────────────────────────────────
-export function DataCard({ title, color = Colors.accent, children }) {
+export function DataCard({ title, color, children }) {
+  const { Colors } = useTheme();
+  const c = color || Colors.accent;
   return (
-    <View style={[styles.dataCard, { borderTopColor: color }]}>
-      <Text style={[styles.dataCardTitle, { color }]}>{title}</Text>
+    <View style={[styles.dataCard, {
+      backgroundColor: Colors.card,
+      borderColor: Colors.border,
+      borderTopColor: c,
+    }]}>
+      <Text style={[styles.dataCardTitle, { color: c }]}>{title}</Text>
       {children}
     </View>
   );
@@ -24,20 +40,23 @@ export function DataCard({ title, color = Colors.accent, children }) {
 
 // ─── Data Row ──────────────────────────────────────────────────
 export function DataRow({ label, value, unit = '' }) {
+  const { Colors } = useTheme();
   return (
     <View style={styles.dataRow}>
-      <Text style={styles.dataLabel}>{label}</Text>
-      <Text style={styles.dataValue}>
-        {value}<Text style={styles.dataUnit}> {unit}</Text>
+      <Text style={[styles.dataLabel, { color: Colors.muted }]}>{label}</Text>
+      <Text style={[styles.dataValue, { color: Colors.text }]}>
+        {value}<Text style={[styles.dataUnit, { color: Colors.muted }]}> {unit}</Text>
       </Text>
     </View>
   );
 }
 
-// ─── Action Button ─────────────────────────────────────────────
-export function ActionBtn({ label, icon, color = Colors.accent, onPress, disabled, size = 'md' }) {
+// ─── Action Button with Image Icon ─────────────────────────────
+export function ActionBtn({ label, iconSource, icon, color, onPress, disabled, size = 'md' }) {
+  const { Colors } = useTheme();
+  const c = color || Colors.accent;
   const [pressed, setPressed] = useState(false);
-  const sz = size === 'lg' ? 68 : size === 'sm' ? 44 : 54;
+  const sz = size === 'lg' ? 72 : size === 'sm' ? 44 : 54;
 
   return (
     <TouchableOpacity
@@ -46,35 +65,42 @@ export function ActionBtn({ label, icon, color = Colors.accent, onPress, disable
       onPressOut={() => setPressed(false)}
       onPress={onPress}
       activeOpacity={0.7}
-      style={[
-        styles.actionBtn,
-        {
-          width: sz,
-          height: sz,
-          borderColor: disabled ? Colors.border : color,
-          backgroundColor: pressed ? `${color}30` : `${color}15`,
-          opacity: disabled ? 0.4 : 1,
-        },
-      ]}
+      style={[styles.actionBtn, {
+        width: sz, height: sz,
+        borderColor: disabled ? Colors.border : c,
+        backgroundColor: pressed ? `${c}40` : `${c}18`,
+        opacity: disabled ? 0.4 : 1,
+      }]}
     >
-      <Text style={[styles.actionIcon, { fontSize: size === 'lg' ? 22 : 18 }]}>{icon}</Text>
-      <Text style={[styles.actionLabel, { color: disabled ? Colors.muted : color }]}>{label}</Text>
+      {iconSource ? (
+        <Image source={iconSource} style={{ width: size === 'lg' ? 32 : 24, height: size === 'lg' ? 32 : 24 }} resizeMode="contain" />
+      ) : (
+        <Text style={{ fontSize: size === 'lg' ? 22 : 18, textAlign: 'center' }}>{icon}</Text>
+      )}
+      <Text style={[styles.actionLabel, { color: disabled ? Colors.muted : c }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
 // ─── Section Header ────────────────────────────────────────────
 export function SectionHeader({ title }) {
-  return <Text style={styles.sectionHeader}>{title}</Text>;
+  const { Colors } = useTheme();
+  return <Text style={[styles.sectionHeader, { color: Colors.muted }]}>{title}</Text>;
 }
 
 // ─── Card Container ────────────────────────────────────────────
 export function Card({ children, style }) {
-  return <View style={[styles.card, style]}>{children}</View>;
+  const { Colors } = useTheme();
+  return (
+    <View style={[styles.card, { backgroundColor: Colors.card, borderColor: Colors.border }, style]}>
+      {children}
+    </View>
+  );
 }
 
 // ─── Toggle Switch ─────────────────────────────────────────────
 export function Toggle({ value, onToggle }) {
+  const { Colors } = useTheme();
   return (
     <TouchableOpacity
       onPress={() => onToggle(!value)}
@@ -88,122 +114,44 @@ export function Toggle({ value, onToggle }) {
 
 // ─── Number Stepper ────────────────────────────────────────────
 export function Stepper({ value, min, max, onChangeValue, unit = '' }) {
+  const { Colors } = useTheme();
   return (
     <View style={styles.stepper}>
       <TouchableOpacity
         onPress={() => value > min && onChangeValue(value - 1)}
-        style={styles.stepBtn}
+        style={[styles.stepBtn, { backgroundColor: Colors.border }]}
       >
-        <Text style={styles.stepBtnText}>−</Text>
+        <Text style={[styles.stepBtnText, { color: Colors.text }]}>−</Text>
       </TouchableOpacity>
-      <Text style={styles.stepValue}>{value}{unit}</Text>
+      <Text style={[styles.stepValue, { color: Colors.accent }]}>{value}{unit}</Text>
       <TouchableOpacity
         onPress={() => value < max && onChangeValue(value + 1)}
-        style={styles.stepBtn}
+        style={[styles.stepBtn, { backgroundColor: Colors.border }]}
       >
-        <Text style={styles.stepBtnText}>+</Text>
+        <Text style={[styles.stepBtnText, { color: Colors.text }]}>+</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // StatusLight
   lightWrapper: { alignItems: 'center', gap: 4 },
-  light: { width: 14, height: 14, borderRadius: 7 },
-  lightOn: {
-    backgroundColor: Colors.green,
-    shadowColor: Colors.green,
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  lightOff: { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#333' },
-  lightLabel: {
-    fontSize: 8,
-    color: Colors.muted,
-    fontFamily: 'monospace',
-    textAlign: 'center',
-    maxWidth: 48,
-  },
-  // DataCard
-  dataCard: {
-    flex: 1,
-    backgroundColor: Colors.card,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderTopWidth: 2,
-    borderRadius: 8,
-    padding: 10,
-  },
-  dataCardTitle: {
-    fontSize: 9,
-    fontFamily: 'monospace',
-    letterSpacing: 2,
-    marginBottom: 8,
-  },
-  // DataRow
+  light: { width: 14, height: 14, borderRadius: 7, borderWidth: 1 },
+  lightLabel: { fontSize: 8, fontFamily: 'monospace', textAlign: 'center', maxWidth: 48 },
+  dataCard: { flex: 1, borderWidth: 1, borderTopWidth: 2, borderRadius: 8, padding: 10 },
+  dataCardTitle: { fontSize: 9, fontFamily: 'monospace', letterSpacing: 2, marginBottom: 8 },
   dataRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 },
-  dataLabel: { fontSize: 10, color: Colors.muted },
-  dataValue: { fontSize: 13, color: Colors.text, fontFamily: 'monospace' },
-  dataUnit: { fontSize: 9, color: Colors.muted },
-  // ActionBtn
-  actionBtn: {
-    borderRadius: 12,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-  },
-  actionIcon: { textAlign: 'center' },
+  dataLabel: { fontSize: 10 },
+  dataValue: { fontSize: 13, fontFamily: 'monospace' },
+  dataUnit: { fontSize: 9 },
+  actionBtn: { borderRadius: 14, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', gap: 3 },
   actionLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 1 },
-  // SectionHeader
-  sectionHeader: {
-    fontSize: 9,
-    color: Colors.muted,
-    fontFamily: 'monospace',
-    letterSpacing: 2,
-    marginBottom: 10,
-  },
-  // Card
-  card: {
-    backgroundColor: Colors.card,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    padding: 14,
-  },
-  // Toggle
-  toggle: {
-    width: 46,
-    height: 24,
-    borderRadius: 12,
-    position: 'relative',
-    justifyContent: 'center',
-  },
-  toggleThumb: {
-    position: 'absolute',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: Colors.white,
-  },
-  // Stepper
+  sectionHeader: { fontSize: 9, fontFamily: 'monospace', letterSpacing: 2, marginBottom: 10 },
+  card: { borderWidth: 1, borderRadius: 10, padding: 14 },
+  toggle: { width: 46, height: 24, borderRadius: 12, position: 'relative', justifyContent: 'center' },
+  toggleThumb: { position: 'absolute', width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff' },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  stepBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    backgroundColor: Colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepBtnText: { color: Colors.text, fontSize: 16, fontWeight: '600' },
-  stepValue: {
-    minWidth: 52,
-    textAlign: 'center',
-    fontFamily: 'monospace',
-    fontSize: 13,
-    color: Colors.accent,
-  },
+  stepBtn: { width: 28, height: 28, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  stepBtnText: { fontSize: 16, fontWeight: '600' },
+  stepValue: { minWidth: 52, textAlign: 'center', fontFamily: 'monospace', fontSize: 13 },
 });

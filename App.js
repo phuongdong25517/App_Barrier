@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
-import {
-  View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, StatusBar,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, Image } from 'react-native';
+import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { BluetoothProvider, useBluetooth } from './src/context/BluetoothContext';
-import { Colors } from './src/theme';
 import DashScreen from './src/screens/DashScreen';
 import SettingScreen from './src/screens/SettingScreen';
 import OtaScreen from './src/screens/OtaScreen';
@@ -15,23 +12,28 @@ const TABS = [
   { id: 0, label: 'DASH', icon: '◉' },
   { id: 1, label: 'SETTINGS', icon: '⚙' },
   { id: 2, label: 'OTA', icon: '↑' },
-  { id: 3, label: 'APP', icon: '☰' },
+  { id: 3, label: 'APP', icon: null, image: require('./assets/icons/icon_app.png') },
 ];
 
 function Header({ onConnectPress }) {
+  const { Colors } = useTheme();
   const { connected, connectedDevice } = useBluetooth();
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, { backgroundColor: Colors.surface, borderBottomColor: Colors.border }]}>
       <View style={styles.headerLeft}>
-        <Text style={styles.headerTitle}>BARRIER</Text>
-        <Text style={styles.headerSub}>HC-05 CONTROLLER</Text>
+        <Text style={[styles.headerTitle, { color: Colors.accent }]}>Barrier Gen2</Text>
+        <Text style={[styles.headerSub, { color: Colors.muted }]}>GEN2 MAINBOARD</Text>
       </View>
       <TouchableOpacity
-        style={[styles.connectBtn, connected && styles.connectBtnActive]}
+        style={[styles.connectBtn, {
+          backgroundColor: connected ? `${Colors.green}18` : `${Colors.muted}18`,
+          borderColor: connected ? Colors.green : Colors.muted,
+        }]}
         onPress={onConnectPress}
       >
-        <View style={[styles.dot, connected && styles.dotActive]} />
-        <Text style={[styles.connectText, connected && styles.connectTextActive]}>
+        <View style={[styles.dot, { backgroundColor: connected ? Colors.green : Colors.muted,
+          shadowColor: connected ? Colors.green : 'transparent', shadowOpacity: connected ? 1 : 0, shadowRadius: 4 }]} />
+        <Text style={[styles.connectText, { color: connected ? Colors.green : Colors.muted }]}>
           {connected ? (connectedDevice?.name || 'CONNECTED') : 'CONNECT'}
         </Text>
       </TouchableOpacity>
@@ -42,19 +44,20 @@ function Header({ onConnectPress }) {
 function AppContent() {
   const [activeTab, setActiveTab] = useState(0);
   const [showBt, setShowBt] = useState(false);
+  const { Colors, isDark } = useTheme();
   const { connected, disconnectDevice } = useBluetooth();
 
   const handleConnectPress = () => {
-    if (connected) {
-      disconnectDevice();
-    } else {
-      setShowBt(true);
-    }
+    if (connected) disconnectDevice();
+    else setShowBt(true);
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor={Colors.surface} />
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: Colors.bg }]}>
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={Colors.surface}
+      />
       <Header onConnectPress={handleConnectPress} />
 
       <View style={styles.screenContainer}>
@@ -65,17 +68,21 @@ function AppContent() {
       </View>
 
       {/* Bottom Navigation */}
-      <View style={styles.navbar}>
+      <View style={[styles.navbar, { backgroundColor: Colors.surface, borderTopColor: Colors.border }]}>
         {TABS.map(tab => (
           <TouchableOpacity
             key={tab.id}
             onPress={() => setActiveTab(tab.id)}
-            style={[styles.navItem, activeTab === tab.id && styles.navItemActive]}
+            style={[styles.navItem, { borderTopColor: activeTab === tab.id ? Colors.accent : 'transparent' }]}
           >
-            <Text style={[styles.navIcon, activeTab === tab.id && styles.navIconActive]}>
-              {tab.icon}
-            </Text>
-            <Text style={[styles.navLabel, activeTab === tab.id && styles.navLabelActive]}>
+            {tab.image ? (
+              <Image source={tab.image} style={[styles.navImage, { tintColor: activeTab === tab.id ? Colors.accent : Colors.muted }]} />
+            ) : (
+              <Text style={[styles.navIcon, { color: activeTab === tab.id ? Colors.accent : Colors.muted }]}>
+                {tab.icon}
+              </Text>
+            )}
+            <Text style={[styles.navLabel, { color: activeTab === tab.id ? Colors.accent : Colors.muted }]}>
               {tab.label}
             </Text>
           </TouchableOpacity>
@@ -89,72 +96,27 @@ function AppContent() {
 
 export default function App() {
   return (
-    <BluetoothProvider>
-      <AppContent />
-    </BluetoothProvider>
+    <ThemeProvider>
+      <BluetoothProvider>
+        <AppContent />
+      </BluetoothProvider>
+    </ThemeProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: Colors.bg },
-  header: {
-    backgroundColor: Colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
+  safeArea: { flex: 1 },
+  header: { borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 },
   headerLeft: { gap: 2 },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: Colors.accent,
-    letterSpacing: 4,
-    fontFamily: 'monospace',
-  },
-  headerSub: { fontSize: 8, color: Colors.muted, fontFamily: 'monospace', letterSpacing: 1 },
-  connectBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: `${Colors.muted}18`,
-    borderWidth: 1.5,
-    borderColor: Colors.muted,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  connectBtnActive: {
-    backgroundColor: `${Colors.green}18`,
-    borderColor: Colors.green,
-  },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.muted },
-  dotActive: { backgroundColor: Colors.green },
-  connectText: { fontSize: 11, color: Colors.muted, fontWeight: '700', letterSpacing: 1 },
-  connectTextActive: { color: Colors.green },
+  headerTitle: { fontSize: 20, fontWeight: '900', letterSpacing: 2, fontFamily: 'monospace' },
+  headerSub: { fontSize: 8, fontFamily: 'monospace', letterSpacing: 1 },
+  connectBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  connectText: { fontSize: 11, fontWeight: '700', letterSpacing: 1 },
   screenContainer: { flex: 1 },
-  navbar: {
-    backgroundColor: Colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    flexDirection: 'row',
-    paddingBottom: 8,
-    paddingTop: 4,
-  },
-  navItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingTop: 8,
-    gap: 3,
-    borderTopWidth: 2,
-    borderTopColor: 'transparent',
-  },
-  navItemActive: { borderTopColor: Colors.accent },
-  navIcon: { fontSize: 18, color: Colors.muted },
-  navIconActive: { color: Colors.accent },
-  navLabel: { fontSize: 8, color: Colors.muted, fontWeight: '700', letterSpacing: 1 },
-  navLabelActive: { color: Colors.accent },
+  navbar: { borderTopWidth: 1, flexDirection: 'row', paddingBottom: 8, paddingTop: 4 },
+  navItem: { flex: 1, alignItems: 'center', paddingTop: 8, gap: 3, borderTopWidth: 2 },
+  navIcon: { fontSize: 18 },
+  navImage: { width: 20, height: 20 },
+  navLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 1 },
 });
