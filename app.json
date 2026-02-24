@@ -7,11 +7,19 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": false,
+    "icon": "./assets/icon.png",
     "splash": {
-      "backgroundColor": "#0a0e14"
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0e1426"
     },
     "android": {
       "package": "com.barrier.app",
+      "icon": "./assets/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#0e1426"
+      },
       "permissions": [
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
