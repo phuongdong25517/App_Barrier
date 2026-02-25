@@ -156,7 +156,12 @@ export function BluetoothProvider({ children }) {
     }
     try {
       // Connect with no delimiter — we handle framing manually
-      const dev = await RNBluetooth.connectToDevice(device.address);
+      // NO delimiter — we handle framing manually
+      // Using delimiter:'\n' would block ACK bytes (0x79) since they have no newline
+      const dev = await RNBluetooth.connectToDevice(device.address, {
+        delimiter: '',     // empty = fire callback for every chunk received
+        charset: 'binary', // treat data as raw bytes, not UTF-8 text
+      });
       btDevice.current = dev;
       setConnectedDevice(device);
       setConnected(true);
