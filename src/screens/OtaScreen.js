@@ -1,7 +1,7 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
-  Alert, ActivityIndicator, TextInput,
+  Alert, ActivityIndicator,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -19,10 +19,13 @@ const ACK         = 0x79;
 const NACK        = 0x1F;
 const BLOCK_SIZE  = 256;
 const START_ADDR  = 0x08004000;
+const TIMEOUT_CMD   = 5000;
+const TIMEOUT_ERASE = 30000;
+const TIMEOUT_BLOCK = 3000;
 
 const STATUSES = {
   idle:    { label: 'IDLE',       color: '#5a7a94' },
-  booting: { label: 'BOOTING...',  color: '#ffd600' },
+  booting: { label: 'BOOTING...', color: '#ffd600' },
   hello:   { label: 'HELLO',      color: '#00d4ff' },
   fwinfo:  { label: 'FW INFO',    color: '#00d4ff' },
   erasing: { label: 'ERASING...', color: '#ff8c00' },
@@ -33,15 +36,22 @@ const STATUSES = {
 
 export default function OtaScreen() {
   const { Colors } = useTheme();
-  const { connected, sendCommand, writeParam } = useBluetooth();
+  const { connected, sendRawBytes, writeParam, setRawByteListener } = useBluetooth();
 
-  const [fileName, setFileName]     = useState('');
-  const [fwData, setFwData]         = useState(null);   // Uint8Array
-  const [progress, setProgress]     = useState(0);
-  const [status, setStatus]         = useState('idle');
-  const [logs, setLogs]             = useState([]);
-  const [running, setRunning]       = useState(false);
-  const abortRef = useRef(false);
+  const [fileName, setFileName] = useState('');
+  const [fwData,   setFwData]   = useState(null);   // Uint8Array
+  const [progress, setProgress] = useState(0);
+  const [status,   setStatus]   = useState('idle');
+  const [logs,     setLogs]     = useState([]);
+  const [running,  setRunning]  = useState(false);
+
+  const abortRef    = useRef(false);
+  const byteQueue   = useRef([]);
+  const byteResolve = useRef(null);
+
+  useEffect(() => {
+    return () => { setRawByteListener(null); };
+  }, []);
 
   // ── Logging ────────────────────────────────────────────────────
   const log = useCallback((msg, type = 'info') => {
@@ -50,8 +60,60 @@ export default function OtaScreen() {
     setLogs(p => [`[${t}] ${icon} ${msg}`, ...p.slice(0, 299)]);
   }, []);
 
+  // ── Raw byte mode ──────────────────────────────────────────────
+  const activateRawMode = useCallback(() => {
+    byteQueue.current = [];
+    setRawByteListener((bytes) => {
+      byteQueue.current.push(...bytes);
+      if (byteResolve.current) {
+        const resolve = byteResolve.current;
+        byteResolve.current = null;
+        resolve(byteQueue.current.shift());
+      }
+    });
+  }, [setRawByteListener]);
+
+  const deactivateRawMode = useCallback(() => {
+    setRawByteListener(null);
+    byteQueue.current = [];
+    byteResolve.current = null;
+  }, [setRawByteListener]);
+
+  // ── Wait 1 byte with timeout ────────────────────────────────────
+  const waitByte = (timeoutMs = TIMEOUT_CMD) => new Promise((resolve, reject) => {
+    if (byteQueue.current.length > 0) {
+      resolve(byteQueue.current.shift());
+      return;
+    }
+    const timer = setTimeout(() => {
+      byteResolve.current = null;
+      reject(new Error(`Timeout ${timeoutMs/1000}s — thiết bị không phản hồi`));
+    }, timeoutMs);
+    byteResolve.current = (byte) => { clearTimeout(timer); resolve(byte); };
+  });
+
+  // ── Wait ACK/NACK ───────────────────────────────────────────────
+  const waitAck = async (timeoutMs = TIMEOUT_CMD) => {
+    const byte = await waitByte(timeoutMs);
+    const label = byte === ACK ? 'ACK ✓' : byte === NACK ? 'NACK ✗' : `0x${byte.toString(16)}`;
+    log(`RX ← 0x${byte.toString(16).padStart(2,'0')} [${label}]`,
+        byte === ACK ? 'ok' : 'error');
+    if (byte === NACK) throw new Error(`NACK từ thiết bị — dừng quá trình`);
+    if (byte !== ACK)  throw new Error(`Byte không hợp lệ: 0x${byte.toString(16)}`);
+  };
+
+  // ── Send bytes ─────────────────────────────────────────────────
+  const send = async (uint8Array) => {
+    const preview = Array.from(uint8Array.slice(0, 4))
+      .map(b => '0x' + b.toString(16).padStart(2,'0')).join(' ');
+    const suffix = uint8Array.length > 4 ? ` ... (${uint8Array.length}B)` : '';
+    log(`TX → [${preview}${suffix}]`);
+    const ok = await sendRawBytes(uint8Array);
+    if (!ok) throw new Error('Gửi bytes thất bại');
+  };
+
   // ── Parse Intel HEX → Uint8Array ──────────────────────────────
-  const parseHex = (hexStr) => {
+  const parseIntelHex = (hexStr) => {
     const bytes = [];
     for (const line of hexStr.split('\n')) {
       const l = line.trim();
@@ -59,14 +121,16 @@ export default function OtaScreen() {
       const count = parseInt(l.substr(1, 2), 16);
       const type  = parseInt(l.substr(7, 2), 16);
       if (type === 0x00) {
+        // Data record — extract payload bytes only
         for (let i = 0; i < count; i++)
           bytes.push(parseInt(l.substr(9 + i * 2, 2), 16));
-      } else if (type === 0x01) break;
+      } else if (type === 0x01) break; // EOF record
     }
+    if (bytes.length === 0) throw new Error('HEX file không có data — kiểm tra lại file');
     return new Uint8Array(bytes);
   };
 
-  // ── Pick file ─────────────────────────────────────────────────
+  // ── Pick firmware file (.bin hoặc .hex) ───────────────────────
   const pickFile = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -75,166 +139,154 @@ export default function OtaScreen() {
       });
       if (result.canceled) return;
       const file = result.assets[0];
-      if (!file.name.endsWith('.bin') && !file.name.endsWith('.hex')) {
-        Alert.alert('Lỗi', 'Chỉ hỗ trợ .bin hoặc .hex'); return;
+
+      const isBin = file.name.endsWith('.bin');
+      const isHex = file.name.endsWith('.hex');
+      if (!isBin && !isHex) {
+        Alert.alert('Sai định dạng', 'Chỉ hỗ trợ .bin hoặc .hex');
+        return;
       }
-      log(`Đã chọn: ${file.name} (${(file.size/1024).toFixed(1)} KB)`);
-      setFileName(file.name);
 
-      // Read file
-      const content = await FileSystem.readAsStringAsync(file.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const raw = Uint8Array.from(atob(content), c => c.charCodeAt(0));
-
+      log(`Đọc file: ${file.name} (${(file.size/1024).toFixed(1)} KB)`);
       let data;
-      if (file.name.endsWith('.hex')) {
+
+      if (isBin) {
+        // ── BIN: đọc base64 → Uint8Array, không cần xử lý gì thêm
+        const b64 = await FileSystem.readAsStringAsync(file.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        data = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        log(`BIN: ${data.length} bytes — gửi thẳng không cần decode`, 'ok');
+      } else {
+        // ── HEX: đọc text → parse từng dòng Intel HEX → binary ───
         const text = await FileSystem.readAsStringAsync(file.uri, {
           encoding: FileSystem.EncodingType.UTF8,
         });
-        data = parseHex(text);
-        log(`HEX decoded → ${data.length} bytes binary`, 'ok');
-      } else {
-        data = raw;
-        log(`BIN loaded → ${data.length} bytes`, 'ok');
+        data = parseIntelHex(text);
+        log(`HEX: parsed → ${data.length} bytes binary`, 'ok');
       }
+
+      setFileName(file.name);
       setFwData(data);
+      log(`✓ Sẵn sàng: ${data.length} bytes = ${Math.ceil(data.length/BLOCK_SIZE)} blocks`, 'ok');
     } catch (e) {
-      log(`Lỗi chọn file: ${e.message}`, 'error');
+      log(`Lỗi đọc file: ${e.message}`, 'error');
     }
   };
 
-  // ── Wait ACK (hooks into BT read stream) ──────────────────────
-  const waitAck = (ms = 5000) => new Promise(resolve => {
-    // Real implementation: subscribe to BT data stream in BluetoothContext
-    // and resolve when ACK/NACK byte received
-    // Placeholder simulation:
-    setTimeout(() => resolve(ACK), 400);
-  });
-
-  const sendRaw = async (bytes) => {
-    const hex = Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join('');
-    await sendCommand(`__RAW__:${hex}`);
-  };
-
-  // ── OTA Steps ─────────────────────────────────────────────────
+  // ── OTA Steps ──────────────────────────────────────────────────
   const stepHello = async () => {
-    log('Gửi HELLO (0x7F)...');
-    await sendRaw(new Uint8Array([CMD_HELLO]));
-    const r = await waitAck();
-    if (r !== ACK) throw new Error('HELLO → NACK hoặc timeout');
-    log('HELLO → ACK', 'ok');
+    log('── STEP 1: HELLO (0x7F) ──');
+    await send(new Uint8Array([CMD_HELLO]));
+    await waitAck(TIMEOUT_CMD);
   };
 
   const stepFwInfo = async (size) => {
-    log(`Gửi FW_INFO — addr=0x${START_ADDR.toString(16).toUpperCase()}, size=${size}`);
+    log(`── STEP 2: FW_INFO (0x10) — addr=0x${START_ADDR.toString(16).toUpperCase()}, size=${size}B ──`);
+    // Frame: [CMD 1B][Start_addr 4B LE][Size 4B LE] = 9 bytes
     const buf = new ArrayBuffer(9);
-    const view = new DataView(buf);
-    view.setUint8(0, CMD_FWINFO);
-    view.setUint32(1, START_ADDR, true);
-    view.setUint32(5, size, true);
-    await sendRaw(new Uint8Array(buf));
-    const r = await waitAck();
-    if (r !== ACK) throw new Error('FW_INFO → NACK');
-    log('FW_INFO → ACK', 'ok');
+    const v   = new DataView(buf);
+    v.setUint8 (0, CMD_FWINFO);
+    v.setUint32(1, START_ADDR, true); // little-endian
+    v.setUint32(5, size,       true); // little-endian
+    await send(new Uint8Array(buf));
+    await waitAck(TIMEOUT_CMD);
   };
 
   const stepErase = async () => {
-    log('Gửi ERASE (0x43)...');
-    await sendRaw(new Uint8Array([CMD_ERASE]));
-    const r = await waitAck(30000);
-    if (r !== ACK) throw new Error('ERASE → NACK');
-    log('ERASE → ACK (flash đã xóa)', 'ok');
+    log('── STEP 3: ERASE (0x43) — đang xóa flash... ──');
+    await send(new Uint8Array([CMD_ERASE]));
+    await waitAck(TIMEOUT_ERASE); // có thể lâu ~10-30s
   };
 
   const stepWrite = async (data) => {
-    const total = Math.ceil(data.length / BLOCK_SIZE);
-    log(`Gửi WRITE (0x31) — ${total} blocks...`);
-    await sendRaw(new Uint8Array([CMD_WRITE]));
-    const r0 = await waitAck();
-    if (r0 !== ACK) throw new Error('WRITE init → NACK');
+    const totalBlocks = Math.ceil(data.length / BLOCK_SIZE);
+    log(`── STEP 4: WRITE (0x31) — ${totalBlocks} blocks × ${BLOCK_SIZE}B ──`);
+    await send(new Uint8Array([CMD_WRITE]));
+    await waitAck(TIMEOUT_CMD);
+    log('Bắt đầu gửi data blocks...', 'ok');
 
-    for (let i = 0; i < total; i++) {
+    for (let i = 0; i < totalBlocks; i++) {
       if (abortRef.current) throw new Error('Đã hủy bởi người dùng');
-      const block = new Uint8Array(BLOCK_SIZE);
+
+      // Tạo block 256 bytes, pad cuối bằng 0xFF
+      const block = new Uint8Array(BLOCK_SIZE).fill(0xFF);
       block.set(data.slice(i * BLOCK_SIZE, (i + 1) * BLOCK_SIZE));
-      await sendRaw(block);
-      const r = await waitAck();
-      if (r === NACK) throw new Error(`Block ${i+1}/${total} → NACK`);
-      const pct = Math.round(((i+1)/total)*100);
+
+      await send(block);
+      await waitAck(TIMEOUT_BLOCK);
+
+      const pct = Math.round(((i + 1) / totalBlocks) * 100);
       setProgress(pct);
-      if (i % 20 === 0 || i === total-1)
-        log(`Block ${i+1}/${total} — ${pct}%`, 'ok');
+      if (i % 20 === 0 || i === totalBlocks - 1)
+        log(`Block ${i+1}/${totalBlocks} — ${pct}%`, 'ok');
     }
-    log('WRITE hoàn thành', 'ok');
   };
 
   const stepGotoApp = async () => {
-    log('Gửi GOTOAPP (0x21)...');
-    await sendRaw(new Uint8Array([CMD_GOTOAPP]));
-    const r = await waitAck();
-    if (r !== ACK) throw new Error('GOTOAPP → NACK');
-    log('GOTOAPP → ACK ✓ Firmware khởi động!', 'ok');
+    log('── STEP 5: GOTOAPP (0x21) ──');
+    await send(new Uint8Array([CMD_GOTOAPP]));
+    await waitAck(TIMEOUT_CMD);
   };
 
-  // ── Flash procedure ───────────────────────────────────────────
+  // ── FLASH ──────────────────────────────────────────────────────
   const startFlash = async () => {
     if (!connected) { Alert.alert('Chưa kết nối', 'Kết nối HC-05 trước'); return; }
-    if (!fwData)    { Alert.alert('Chưa có firmware', 'Chọn file .bin/.hex trước'); return; }
+    if (!fwData)    { Alert.alert('Chưa có firmware', 'Chọn file .bin trước'); return; }
 
     abortRef.current = false;
     setRunning(true); setProgress(0); setLogs([]);
+    activateRawMode();
 
     try {
       setStatus('booting');
-      log('Vào Bootloader Mode...');
+      log('Gửi lệnh vào Bootloader...');
       writeParam('UPDATE_FW', 1);
+      log('Chờ reboot (2s)...');
       await new Promise(r => setTimeout(r, 2000));
-      log('Mainboard đang khởi động Bootloader...', 'ok');
 
-      setStatus('hello');
-      await stepHello();
+      setStatus('hello');   await stepHello();
+      setStatus('fwinfo');  await stepFwInfo(fwData.length);
+      setStatus('erasing'); await stepErase();
+      setStatus('writing'); await stepWrite(fwData);
+                            await stepGotoApp();
 
-      setStatus('fwinfo');
-      await stepFwInfo(fwData.length);
-
-      setStatus('erasing');
-      await stepErase();
-
-      setStatus('writing');
-      await stepWrite(fwData);
-
-      await stepGotoApp();
       setStatus('done');
-      log('🎉 FOTA thành công!', 'ok');
-      Alert.alert('✓ Thành công', 'Firmware đã được cập nhật thành công!');
+      log('🎉 FOTA hoàn thành!', 'ok');
+      Alert.alert('✓ Thành công', 'Firmware đã cập nhật thành công!');
     } catch (e) {
       setStatus('error');
       log(`LỖI: ${e.message}`, 'error');
       Alert.alert('✗ Lỗi FOTA', e.message);
     } finally {
       setRunning(false);
+      deactivateRawMode();
     }
   };
 
-  // ── Erase only ────────────────────────────────────────────────
+  // ── ERASE ONLY ─────────────────────────────────────────────────
   const eraseOnly = () => {
     if (!connected) { Alert.alert('Chưa kết nối'); return; }
     Alert.alert('⚠ Xác nhận ERASE', 'Toàn bộ firmware sẽ bị xóa!', [
       { text: 'Hủy', style: 'cancel' },
       { text: 'ERASE', style: 'destructive', onPress: async () => {
         setRunning(true); setLogs([]);
+        activateRawMode();
         try {
           setStatus('booting');
           writeParam('UPDATE_FW', 1);
           await new Promise(r => setTimeout(r, 2000));
-          setStatus('hello');  await stepHello();
+          setStatus('hello');   await stepHello();
           setStatus('erasing'); await stepErase();
           setStatus('idle');
-          log('Erase chip hoàn thành', 'ok');
+          log('Erase hoàn thành', 'ok');
         } catch(e) {
-          setStatus('error'); log(`Lỗi Erase: ${e.message}`, 'error');
-        } finally { setRunning(false); }
+          setStatus('error');
+          log(`Lỗi: ${e.message}`, 'error');
+        } finally {
+          setRunning(false);
+          deactivateRawMode();
+        }
       }}
     ]);
   };
@@ -250,33 +302,38 @@ export default function OtaScreen() {
           <View style={[styles.dot, { backgroundColor: s.color }]} />
           <Text style={[styles.statusLabel, { color: s.color }]}>{s.label}</Text>
           {fwData && (
-            <Text style={[styles.fwSize, { color: Colors.muted }]}>
-              {fileName}  ·  {(fwData.length/1024).toFixed(1)} KB
+            <Text style={[styles.fwMeta, { color: Colors.muted }]}>
+              {(fwData.length/1024).toFixed(1)} KB · {Math.ceil(fwData.length/BLOCK_SIZE)} blocks
             </Text>
           )}
         </View>
 
         {/* File Picker */}
         <Card>
-          <SectionHeader title="FIRMWARE FILE" />
-          <View style={styles.fileRow}>
-            <TextInput
-              style={[styles.fileInput, { backgroundColor: Colors.bg, borderColor: Colors.border, color: Colors.text }]}
-              value={fileName}
-              placeholder="Chưa chọn file..."
-              placeholderTextColor={Colors.muted}
-              editable={false}
-            />
-            <TouchableOpacity
-              style={[styles.browseBtn, { backgroundColor: `${Colors.accent}22`, borderColor: Colors.accent }]}
-              onPress={pickFile} disabled={running}
-            >
-              <Text style={[styles.browseTxt, { color: Colors.accent }]}>📁  CHỌN</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={[styles.hint, { color: Colors.muted }]}>
-            Hỗ trợ: .bin (binary) · .hex (Intel HEX — tự decode)
-          </Text>
+          <SectionHeader title="FIRMWARE FILE (.bin / .hex)" />
+          <TouchableOpacity
+            style={[styles.filePicker, {
+              backgroundColor: Colors.bg,
+              borderColor: fwData ? Colors.green : Colors.border,
+            }]}
+            onPress={pickFile} disabled={running}
+          >
+            <Text style={{ fontSize: 28 }}>{fwData ? '✅' : '📂'}</Text>
+            <View style={styles.fileInfo}>
+              <Text style={[styles.fileNameTxt, { color: fwData ? Colors.green : Colors.muted }]}>
+                {fileName || 'Nhấn để chọn file .bin hoặc .hex...'}
+              </Text>
+              {fwData ? (
+                <Text style={[styles.fileMeta, { color: Colors.muted }]}>
+                  {fwData.length} bytes  ·  {Math.ceil(fwData.length/BLOCK_SIZE)} blocks × {BLOCK_SIZE}B
+                </Text>
+              ) : (
+                <Text style={[styles.fileMeta, { color: Colors.muted }]}>
+                  .bin → gửi thẳng  ·  .hex → tự decode sang binary
+                </Text>
+              )}
+            </View>
+          </TouchableOpacity>
         </Card>
 
         {/* Progress */}
@@ -291,6 +348,13 @@ export default function OtaScreen() {
                                : Colors.accent,
               }]} />
             </View>
+            <Text style={[styles.progressTxt, { color: Colors.muted }]}>
+              {status === 'erasing' ? 'Đang xóa flash (~10-30s)...'
+             : status === 'writing' ? `Đang ghi firmware...`
+             : status === 'done'    ? 'Hoàn thành!'
+             : status === 'error'   ? 'Đã xảy ra lỗi'
+             : ''}
+            </Text>
           </Card>
         )}
 
@@ -300,9 +364,9 @@ export default function OtaScreen() {
             style={[styles.btn, { flex: 2,
               backgroundColor: running ? `${Colors.red}18` : `${Colors.accent}18`,
               borderColor: running ? Colors.red : Colors.accent,
-              opacity: (!connected && !running) ? 0.5 : 1,
+              opacity: (!connected && !running) ? 0.4 : 1,
             }]}
-            onPress={running ? () => { abortRef.current = true; setRunning(false); setStatus('error'); } : startFlash}
+            onPress={running ? () => { abortRef.current = true; } : startFlash}
           >
             {running && <ActivityIndicator color={Colors.accent} size="small" />}
             {!running && <Text style={styles.btnIcon}>⚡</Text>}
@@ -315,7 +379,7 @@ export default function OtaScreen() {
             style={[styles.btn, { flex: 1,
               backgroundColor: `${Colors.red}15`,
               borderColor: Colors.red,
-              opacity: (running || !connected) ? 0.5 : 1,
+              opacity: (running || !connected) ? 0.4 : 1,
             }]}
             onPress={eraseOnly} disabled={running || !connected}
           >
@@ -324,27 +388,31 @@ export default function OtaScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Protocol Reference */}
+        {/* Protocol */}
         <Card>
-          <SectionHeader title="COMMAND REFERENCE" />
+          <SectionHeader title="PROTOCOL REFERENCE" />
           {[
-            { id:'0x7F', name:'HELLO',   desc:'Kiểm tra kết nối bootloader' },
-            { id:'0x10', name:'FW_INFO', desc:`Addr 0x08004000, Size (9 bytes)` },
-            { id:'0x43', name:'ERASE',   desc:'Xóa toàn bộ application flash' },
-            { id:'0x31', name:'WRITE',   desc:`Stream ${BLOCK_SIZE}B/block + ACK mỗi block` },
-            { id:'0x21', name:'GOTOAPP', desc:'Khởi động firmware sau khi write' },
-            { id:'0x79', name:'ACK',     desc:'Phản hồi thành công từ STM32' },
-            { id:'0x1F', name:'NACK',    desc:'Lỗi — dừng toàn bộ quá trình' },
+            { step:'1', id:'0x7F', name:'HELLO',   size:'1B',   desc:'Kiểm tra bootloader sẵn sàng' },
+            { step:'2', id:'0x10', name:'FW_INFO', size:'9B',   desc:`[CMD][Addr 4B LE][Size 4B LE]` },
+            { step:'3', id:'0x43', name:'ERASE',   size:'1B',   desc:'Xóa toàn bộ application flash' },
+            { step:'4', id:'0x31', name:'WRITE',   size:'1B+N', desc:`CMD→ACK→[${BLOCK_SIZE}B block]×N→ACK` },
+            { step:'5', id:'0x21', name:'GOTOAPP', size:'1B',   desc:'Khởi chạy firmware mới' },
           ].map(r => (
-            <View key={r.id} style={[styles.protoRow, { borderBottomColor: Colors.border }]}>
+            <View key={r.step} style={[styles.protoRow, { borderBottomColor: Colors.border }]}>
+              <Text style={[styles.protoStep, { color: Colors.muted }]}>{r.step}</Text>
               <Text style={[styles.protoId,   { color: Colors.accent }]}>{r.id}</Text>
               <Text style={[styles.protoName, { color: Colors.text }]}>{r.name}</Text>
               <Text style={[styles.protoDesc, { color: Colors.muted }]}>{r.desc}</Text>
             </View>
           ))}
+          <View style={[styles.ackRow, { backgroundColor: `${Colors.green}12`, borderColor: Colors.border }]}>
+            <Text style={[styles.ackTxt, { color: Colors.green }]}>ACK 0x79</Text>
+            <Text style={[styles.ackSep, { color: Colors.border }]}>|</Text>
+            <Text style={[styles.nackTxt, { color: Colors.red }]}>NACK 0x1F → dừng ngay</Text>
+          </View>
         </Card>
 
-        {/* Log Console */}
+        {/* Log */}
         <Card>
           <View style={styles.logHeader}>
             <SectionHeader title="LOG CONSOLE" />
@@ -352,14 +420,18 @@ export default function OtaScreen() {
               <Text style={[styles.clearBtn, { color: Colors.muted }]}>XÓA</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView style={[styles.logBox, { backgroundColor: Colors.bg, borderColor: Colors.border }]}
-            nestedScrollEnabled showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={[styles.logBox, { backgroundColor: Colors.bg, borderColor: Colors.border }]}
+            nestedScrollEnabled showsVerticalScrollIndicator={false}
+          >
             {logs.length === 0
               ? <Text style={[styles.logEmpty, { color: Colors.muted }]}>Chưa có log...</Text>
               : logs.map((l, i) => (
                 <Text key={i} style={[styles.logLine, {
-                  color: l.includes('✗') ? Colors.red
+                  color: l.includes('✗') || l.includes('LỖI') ? Colors.red
                        : l.includes('✓') || l.includes('🎉') ? Colors.green
+                       : l.includes('TX →') ? Colors.accent
+                       : l.includes('RX ←') ? '#ffd600'
                        : Colors.muted,
                 }]}>{l}</Text>
               ))
@@ -375,28 +447,33 @@ export default function OtaScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { padding: 14, gap: 12 },
-  statusCard: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1.5, borderRadius: 10, padding: 12 },
-  dot: { width: 10, height: 10, borderRadius: 5 },
-  statusLabel: { fontFamily: 'monospace', fontWeight: '700', letterSpacing: 2, fontSize: 13, flex: 1 },
-  fwSize: { fontFamily: 'monospace', fontSize: 9, textAlign: 'right' },
-  fileRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
-  fileInput: { flex: 1, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, height: 44, fontFamily: 'monospace', fontSize: 11 },
-  browseBtn: { borderWidth: 1.5, borderRadius: 8, paddingHorizontal: 14, height: 44, alignItems: 'center', justifyContent: 'center' },
-  browseTxt: { fontWeight: '700', fontSize: 11, letterSpacing: 1 },
-  hint: { fontSize: 10 },
-  progressBg: { height: 14, borderRadius: 7, overflow: 'hidden' },
-  progressFill: { height: '100%', borderRadius: 7 },
-  btnRow: { flexDirection: 'row', gap: 10 },
-  btn: { borderWidth: 1.5, borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  btnIcon: { fontSize: 16 },
-  btnTxt: { fontWeight: '700', letterSpacing: 1.5, fontSize: 12 },
-  protoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 7, borderBottomWidth: 1, gap: 8 },
-  protoId: { fontFamily: 'monospace', fontSize: 11, width: 46 },
-  protoName: { fontWeight: '700', fontSize: 11, width: 72 },
-  protoDesc: { fontSize: 10, flex: 1 },
-  logHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  clearBtn: { fontSize: 10, fontWeight: '700', marginBottom: 10 },
-  logBox: { maxHeight: 220, borderWidth: 1, borderRadius: 8, padding: 10 },
-  logEmpty: { fontSize: 10, fontStyle: 'italic' },
-  logLine: { fontSize: 10, fontFamily: 'monospace', marginBottom: 3, lineHeight: 16 },
+  statusCard: { flexDirection:'row', alignItems:'center', gap:10, borderWidth:1.5, borderRadius:10, padding:12 },
+  dot: { width:10, height:10, borderRadius:5 },
+  statusLabel: { fontFamily:'monospace', fontWeight:'700', letterSpacing:2, fontSize:13, flex:1 },
+  fwMeta: { fontFamily:'monospace', fontSize:9 },
+  filePicker: { flexDirection:'row', alignItems:'center', gap:14, borderWidth:1.5, borderRadius:10, padding:16 },
+  fileInfo: { flex:1 },
+  fileNameTxt: { fontFamily:'monospace', fontSize:11, marginBottom:3 },
+  fileMeta: { fontSize:10, lineHeight:15 },
+  progressBg: { height:14, borderRadius:7, overflow:'hidden', marginBottom:6 },
+  progressFill: { height:'100%', borderRadius:7 },
+  progressTxt: { fontSize:10, textAlign:'center' },
+  btnRow: { flexDirection:'row', gap:10 },
+  btn: { borderWidth:1.5, borderRadius:10, padding:14, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:8 },
+  btnIcon: { fontSize:16 },
+  btnTxt: { fontWeight:'700', letterSpacing:1.5, fontSize:12 },
+  protoRow: { flexDirection:'row', alignItems:'center', paddingVertical:7, borderBottomWidth:1, gap:6 },
+  protoStep: { fontSize:10, width:14 },
+  protoId:   { fontFamily:'monospace', fontSize:10, width:44 },
+  protoName: { fontWeight:'700', fontSize:10, width:64 },
+  protoDesc: { fontSize:9, flex:1 },
+  ackRow: { flexDirection:'row', alignItems:'center', gap:12, borderWidth:1, borderRadius:8, padding:10, marginTop:8 },
+  ackTxt: { fontFamily:'monospace', fontWeight:'700', fontSize:11 },
+  ackSep: { fontSize:16 },
+  nackTxt: { fontFamily:'monospace', fontWeight:'700', fontSize:11 },
+  logHeader: { flexDirection:'row', justifyContent:'space-between', alignItems:'center' },
+  clearBtn: { fontSize:10, fontWeight:'700', marginBottom:10 },
+  logBox: { maxHeight:240, borderWidth:1, borderRadius:8, padding:10 },
+  logEmpty: { fontSize:10, fontStyle:'italic' },
+  logLine: { fontSize:10, fontFamily:'monospace', marginBottom:3, lineHeight:16 },
 });
