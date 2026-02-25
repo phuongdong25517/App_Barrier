@@ -186,7 +186,8 @@ export function BluetoothProvider({ children }) {
   }, [addLog, handleIncomingData]);
 
   // ── Disconnect ──────────────────────────────────────────────────
-  const disconnectDevice = useCallback(async () => {
+  // silent=true: chỉ ngắt vật lý, giữ connectedDevice để OTA có thể reconnect
+  const disconnectDevice = useCallback(async (silent = false) => {
     rawByteListener.current = null;
     if (readSub.current) { readSub.current.remove?.(); readSub.current = null; }
     if (btDevice.current?._sim) clearInterval(btDevice.current._sim);
@@ -194,13 +195,43 @@ export function BluetoothProvider({ children }) {
       try { await RNBluetooth.disconnectFromDevice(connectedDevice.address); } catch {}
     }
     btDevice.current = null;
-    setConnected(false);
-    setConnectedDevice(null);
-    setBmsData({ voltage:0, capacity:0, current:0, wattage:0, temperature:0 });
-    setDriverData({ voltage:0, current:0, wattage:0, throttle:0, temperature:0 });
-    setInforData({ firmware:'--', serial:'--', device:'--', odometer:0, mode:'--', error:'' });
-    addLog('Đã ngắt kết nối');
+    if (!silent) {
+      setConnected(false);
+      setConnectedDevice(null);
+      setBmsData({ voltage:0, capacity:0, current:0, wattage:0, temperature:0 });
+      setDriverData({ voltage:0, current:0, wattage:0, throttle:0, temperature:0 });
+      setInforData({ firmware:'--', serial:'--', device:'--', odometer:0, mode:'--', error:'' });
+      addLog('Đã ngắt kết nối');
+    } else {
+      addLog('Ngắt kết nối tạm (OTA)...');
+    }
   }, [connectedDevice, addLog]);
+
+  // ── Connect OTA at 38400 baud ────────────────────────────────────
+  const connectDeviceOta = useCallback(async (device) => {
+    if (!device) { addLog('✗ OTA: không có device'); return false; }
+    addLog(`Reconnect OTA: ${device.name}...`);
+    if (!RNBluetooth || btDevice.current?._demo) {
+      addLog('Demo OTA OK'); setConnected(true);
+      btDevice.current = { _demo: true }; return true;
+    }
+    try {
+      // Baud rate 38400 được cấu hình trên HC-05 bằng AT command.
+      // react-native-bluetooth-classic không có option baudRate.
+      // Ta reconnect với delimiter='' để nhận raw bytes từ bootloader.
+      const dev = await RNBluetooth.connectToDevice(device.address, { delimiter: '' });
+      btDevice.current = dev;
+      setConnected(true);
+      addLog(`✓ OTA connected: ${device.name}`);
+      readSub.current = dev.onDataReceived((evt) => {
+        handleIncomingData(evt?.data ?? evt ?? '');
+      });
+      return true;
+    } catch(e) {
+      addLog(`✗ OTA connect lỗi: ${e.message}`);
+      setConnected(false); return false;
+    }
+  }, [addLog, handleIncomingData]);
 
   // ── Send raw text string (normal commands) ──────────────────────
   const sendCmdRaw = useCallback(async (frame) => {
@@ -248,7 +279,7 @@ export function BluetoothProvider({ children }) {
       isEnabled, connected, connectedDevice, scanning,
       pairedDevices, log,
       bmsData, driverData, motorData, inforData, signals,
-      connectDevice, disconnectDevice, scanPairedDevices,
+      connectDevice, disconnectDevice, connectDeviceOta, scanPairedDevices,
       sendCommand, sendRawBytes, writeParam, readParam,
       setRawByteListener,
     }}>
