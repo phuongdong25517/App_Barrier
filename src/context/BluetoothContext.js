@@ -55,26 +55,46 @@ export function BluetoothProvider({ children }) {
   }, []);
 
   // ── Central data handler ────────────────────────────────────────
-  // react-native-bluetooth-classic returns data as string via onDataReceived
-  // Each char's charCodeAt(0) = the raw byte value
-  const handleIncomingData = useCallback((dataStr) => {
-    if (!dataStr) return;
+  // react-native-bluetooth-classic evt.data format depends on library version:
+  //   v1.73.x: string where each char = 1 raw byte (charCodeAt = byte value)
+  //   some builds: base64 encoded string
+  //   some builds: object { data: string }
+  const handleIncomingData = useCallback((raw) => {
+    if (raw === null || raw === undefined || raw === '') return;
 
-    // Convert string → byte array (each char = 1 byte)
-    const bytes = Array.from(dataStr).map(c => c.charCodeAt(0));
+    // Log raw input for debugging
+    addLog(`DBG RX type=${typeof raw} | ${JSON.stringify(raw).slice(0, 80)}`);
 
-    // ── OTA RAW MODE: forward all bytes to OTA listener ──────────
+    // Extract string content from whatever format
+    let str = '';
+    if (typeof raw === 'string') {
+      str = raw;
+    } else if (typeof raw === 'object') {
+      // Some versions wrap data in object
+      str = String(raw.data ?? raw.message ?? raw.value ?? '');
+    }
+
+    // Convert string → byte array: each char's charCode = the raw byte
+    const bytes = [];
+    for (let i = 0; i < str.length; i++) {
+      bytes.push(str.charCodeAt(i));
+    }
+
+    // ── OTA RAW MODE: forward bytes directly to OTA listener ─────
     if (rawByteListener.current) {
-      rawByteListener.current(bytes);
+      if (bytes.length > 0) {
+        addLog(`DBG OTA bytes: ${bytes.map(b => '0x' + b.toString(16).padStart(2,'0')).join(' ')}`);
+        rawByteListener.current(bytes);
+      }
       return; // do NOT parse as text during OTA
     }
 
     // ── NORMAL TEXT MODE ─────────────────────────────────────────
-    textBuffer.current += dataStr;
+    textBuffer.current += str;
     const lines = textBuffer.current.split('\n');
     textBuffer.current = lines.pop(); // keep incomplete last line
     lines.forEach(l => { if (l.trim()) parseTextFrame(l.trim()); });
-  }, [parseTextFrame]);
+  }, [parseTextFrame, addLog]);
 
   // ── BT enabled check ────────────────────────────────────────────
   useEffect(() => {
@@ -142,10 +162,10 @@ export function BluetoothProvider({ children }) {
       setConnected(true);
       addLog(`✓ Kết nối: ${device.name}`);
 
-      // Single subscription — handles both OTA bytes and normal text
+      // Single subscription — pass full evt for format detection
       readSub.current = dev.onDataReceived((evt) => {
-        // evt.data is a string, each char = 1 raw byte from HC-05
-        handleIncomingData(evt.data || '');
+        // Pass evt.data — but also log full evt for debugging
+        handleIncomingData(evt?.data ?? evt ?? '');
       });
 
       // Request device info after connect
