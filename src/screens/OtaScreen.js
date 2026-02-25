@@ -169,11 +169,16 @@ export default function OtaScreen() {
 
   const stepFwInfo = async (size) => {
     log(`── STEP 2: FW_INFO — addr=0x${START_ADDR.toString(16).toUpperCase()} size=${size}B ──`);
-    const buf = new ArrayBuffer(9);
+
+    // Gửi CMD byte trước, chờ ACK
+    await send(new Uint8Array([CMD_FWINFO]));
+    await waitAck(TIMEOUT_CMD);
+
+    // Gửi payload 8 bytes: [Start_addr 4B LE][Size 4B LE]
+    const buf = new ArrayBuffer(8);
     const v = new DataView(buf);
-    v.setUint8(0, CMD_FWINFO);
-    v.setUint32(1, START_ADDR, true);
-    v.setUint32(5, size, true);
+    v.setUint32(0, START_ADDR, true); // little-endian
+    v.setUint32(4, size,       true); // little-endian
     await send(new Uint8Array(buf));
     await waitAck(TIMEOUT_CMD);
   };
