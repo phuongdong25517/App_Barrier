@@ -8,7 +8,7 @@ import { useBluetooth } from '../context/BluetoothContext';
 export default function AppSettingScreen() {
   const { Colors, isDark, setIsDark } = useTheme();
   const { t, lang, setLang } = useLanguage();
-  const { connected, inforData, writeParam } = useBluetooth();
+  const { connected, inforData, writeParam, SERVICE_UUID, WRITE_UUID, NOTIFY_UUID } = useBluetooth();
 
   const handleMainLock = () => {
     Alert.alert(t.confirmLock, t.confirmLockMsg, [
@@ -31,8 +31,29 @@ export default function AppSettingScreen() {
       <Card>
         <Text style={[styles.sh, { color: Colors.muted }]}>{t.appInfo}</Text>
         <DataRow label={t.appVersion} value="1.0.0" />
-        <DataRow label={t.protocol} value="BT Classic HC-05" />
-        <DataRow label={t.baudRate} value="9600" unit="bps" />
+        <DataRow label={t.protocol} value="BLE 5.2 (FSC-BT630)" />
+        <DataRow label="Chip" value="Nordic nRF52832" />
+      </Card>
+
+      {/* BLE UUID Info */}
+      <Card>
+        <Text style={[styles.sh, { color: Colors.muted }]}>BLE UUID</Text>
+        <View style={[styles.uuidBox, { backgroundColor: Colors.bg, borderColor: Colors.border }]}>
+          <View style={styles.uuidRow}>
+            <Text style={[styles.uuidLabel, { color: Colors.muted }]}>Service</Text>
+            <Text style={[styles.uuidValue, { color: Colors.accent }]}>0x{SERVICE_UUID}</Text>
+          </View>
+          <View style={[styles.uuidDivider, { backgroundColor: Colors.border }]} />
+          <View style={styles.uuidRow}>
+            <Text style={[styles.uuidLabel, { color: Colors.muted }]}>Write (TX)</Text>
+            <Text style={[styles.uuidValue, { color: Colors.green }]}>0x{WRITE_UUID}</Text>
+          </View>
+          <View style={[styles.uuidDivider, { backgroundColor: Colors.border }]} />
+          <View style={styles.uuidRow}>
+            <Text style={[styles.uuidLabel, { color: Colors.muted }]}>Notify (RX)</Text>
+            <Text style={[styles.uuidValue, { color: Colors.yellow }]}>0x{NOTIFY_UUID}</Text>
+          </View>
+        </View>
       </Card>
 
       {/* Device Info */}
@@ -121,6 +142,11 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { padding: 14, gap: 12 },
   sh: { fontSize: 9, fontFamily: 'monospace', letterSpacing: 2, marginBottom: 10 },
+  uuidBox: { borderWidth: 1, borderRadius: 8, overflow: 'hidden' },
+  uuidRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8 },
+  uuidLabel: { fontSize: 11 },
+  uuidValue: { fontFamily: 'monospace', fontSize: 13, fontWeight: '700', letterSpacing: 1 },
+  uuidDivider: { height: 1 },
   langRow: { flexDirection: 'row', gap: 10 },
   langBtn: { flex: 1, borderWidth: 1.5, borderRadius: 10, padding: 12, alignItems: 'center' },
   langBtnText: { fontSize: 13, fontWeight: '600' },

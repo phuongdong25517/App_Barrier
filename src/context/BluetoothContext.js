@@ -1,18 +1,52 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { Alert, Platform, PermissionsAndroid } from 'react-native';
 
-let RNBluetooth = null;
-try { RNBluetooth = require('react-native-bluetooth-classic').default; } catch(e) {}
+// ── FSC-BT630 Default UUIDs ─────────────────────────────────────
+// Service UUID: FFF0  |  Write UUID: FFF2  |  Notify UUID: FFF1
+const SERVICE_UUID  = 'FFF0';
+const WRITE_UUID    = 'FFF2';
+const NOTIFY_UUID   = 'FFF1';
+
+let BleManager = null;
+try {
+  const { BleManager: BM } = require('react-native-ble-plx');
+  BleManager = new BM();
+} catch (e) {}
 
 const BluetoothContext = createContext(null);
 
+// ── Base64 helpers ──────────────────────────────────────────────
+const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function bytesToBase64(bytes) {
+  let result = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i], b1 = bytes[i+1] ?? 0, b2 = bytes[i+2] ?? 0;
+    const idx0 = b0 >> 2;
+    const idx1 = ((b0 & 3) << 4) | (b1 >> 4);
+    const idx2 = ((b1 & 0xF) << 2) | (b2 >> 6);
+    const idx3 = b2 & 0x3F;
+    result += base64Chars[idx0] + base64Chars[idx1];
+    result += (i+1 < bytes.length) ? base64Chars[idx2] : '=';
+    result += (i+2 < bytes.length) ? base64Chars[idx3] : '=';
+  }
+  return result;
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 export function BluetoothProvider({ children }) {
-  const [isEnabled, setIsEnabled]         = useState(false);
-  const [connected, setConnected]         = useState(false);
+  const [isEnabled, setIsEnabled]             = useState(false);
+  const [connected, setConnected]             = useState(false);
   const [connectedDevice, setConnectedDevice] = useState(null);
-  const [scanning, setScanning]           = useState(false);
-  const [pairedDevices, setPairedDevices] = useState([]);
-  const [log, setLog]                     = useState([]);
+  const [scanning, setScanning]               = useState(false);
+  const [scannedDevices, setScannedDevices]   = useState([]);
+  const [log, setLog]                         = useState([]);
 
   const [bmsData,    setBmsData]    = useState({ voltage:0, capacity:0, current:0, wattage:0, temperature:0 });
   const [driverData, setDriverData] = useState({ voltage:0, current:0, wattage:0, throttle:0, temperature:0 });
@@ -20,14 +54,15 @@ export function BluetoothProvider({ children }) {
   const [inforData,  setInforData]  = useState({ firmware:'--', serial:'--', device:'--', odometer:0, mode:'--', error:'' });
   const [signals,    setSignals]    = useState({ closeLimit:false, openLimit:false, closeDecel:false, openDecel:false, photocell:false });
 
-  const readSub          = useRef(null);
-  const btDevice         = useRef(null);
+  const bleDevice        = useRef(null);
+  const notifySub        = useRef(null);
+  const disconnectSub    = useRef(null);
   const textBuffer       = useRef('');
-  // OTA registers this callback to receive raw bytes from device
   const rawByteListener  = useRef(null);
+  const scanSub          = useRef(null);
 
   const addLog = useCallback((msg) => {
-    const time = new Date().toLocaleTimeString('vi-VN', { hour12:false });
+    const time = new Date().toLocaleTimeString('vi-VN', { hour12: false });
     setLog(prev => [`[${time}] ${msg}`, ...prev.slice(0, 99)]);
   }, []);
 
@@ -54,55 +89,42 @@ export function BluetoothProvider({ children }) {
     }
   }, []);
 
-  // ── Central data handler ────────────────────────────────────────
-  // react-native-bluetooth-classic evt.data format depends on library version:
-  //   v1.73.x: string where each char = 1 raw byte (charCodeAt = byte value)
-  //   some builds: base64 encoded string
-  //   some builds: object { data: string }
-  const handleIncomingData = useCallback((raw) => {
-    if (raw === null || raw === undefined || raw === '') return;
+  // ── Handle incoming BLE notification data ──────────────────────
+  const handleIncomingData = useCallback((base64Data) => {
+    if (!base64Data) return;
 
-    // Log raw input for debugging
-    addLog(`DBG RX type=${typeof raw} | ${JSON.stringify(raw).slice(0, 80)}`);
+    // Decode base64 → bytes
+    const bytes = Array.from(base64ToBytes(base64Data));
 
-    // Extract string content from whatever format
-    let str = '';
-    if (typeof raw === 'string') {
-      str = raw;
-    } else if (typeof raw === 'object') {
-      // Some versions wrap data in object
-      str = String(raw.data ?? raw.message ?? raw.value ?? '');
-    }
-
-    // Convert string → byte array: each char's charCode = the raw byte
-    const bytes = [];
-    for (let i = 0; i < str.length; i++) {
-      bytes.push(str.charCodeAt(i));
-    }
-
-    // ── OTA RAW MODE: forward bytes directly to OTA listener ─────
+    // ── OTA RAW MODE ─────────────────────────────────────────────
     if (rawByteListener.current) {
       if (bytes.length > 0) {
-        addLog(`DBG OTA bytes: ${bytes.map(b => '0x' + b.toString(16).padStart(2,'0')).join(' ')}`);
+        addLog(`DBG OTA: ${bytes.map(b => '0x' + b.toString(16).padStart(2,'0')).join(' ')}`);
         rawByteListener.current(bytes);
       }
-      return; // do NOT parse as text during OTA
+      return;
     }
 
     // ── NORMAL TEXT MODE ─────────────────────────────────────────
+    // Convert bytes → string
+    const str = bytes.map(b => String.fromCharCode(b)).join('');
     textBuffer.current += str;
     const lines = textBuffer.current.split('\n');
-    textBuffer.current = lines.pop(); // keep incomplete last line
+    textBuffer.current = lines.pop();
     lines.forEach(l => { if (l.trim()) parseTextFrame(l.trim()); });
   }, [parseTextFrame, addLog]);
 
-  // ── BT enabled check ────────────────────────────────────────────
+  // ── BLE state monitor ────────────────────────────────────────
   useEffect(() => {
-    if (!RNBluetooth) return;
-    RNBluetooth.isBluetoothEnabled().then(setIsEnabled).catch(() => {});
+    if (!BleManager) return;
+    const sub = BleManager.onStateChange((state) => {
+      setIsEnabled(state === 'PoweredOn');
+      if (state === 'PoweredOn') addLog('BLE bật sẵn sàng');
+    }, true);
+    return () => sub?.remove();
   }, []);
 
-  // ── Permissions ─────────────────────────────────────────────────
+  // ── Request permissions ──────────────────────────────────────
   const requestPermissions = async () => {
     if (Platform.OS !== 'android') return true;
     try {
@@ -110,6 +132,7 @@ export function BluetoothProvider({ children }) {
         const grants = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         ]);
         return Object.values(grants).every(v => v === PermissionsAndroid.RESULTS.GRANTED);
       } else {
@@ -119,153 +142,236 @@ export function BluetoothProvider({ children }) {
     } catch { return false; }
   };
 
-  // ── Scan paired devices ─────────────────────────────────────────
+  // ── Scan BLE devices ─────────────────────────────────────────
   const scanPairedDevices = useCallback(async () => {
     setScanning(true);
-    if (!RNBluetooth) {
+    setScannedDevices([]);
+
+    if (!BleManager) {
+      // Demo mode
       setTimeout(() => {
-        setPairedDevices([{ name:'HC-05', address:'00:11:22:33:44:55', id:'1' }]);
+        setScannedDevices([{ name:'FSC-BT630', id:'AA:BB:CC:DD:EE:FF' }]);
         setScanning(false);
-        addLog('Demo mode — không có BT thật');
-      }, 1000);
+        addLog('Demo mode — không có BLE thật');
+      }, 1500);
       return;
     }
+
+    const ok = await requestPermissions();
+    if (!ok) {
+      Alert.alert('Cần quyền Bluetooth & Location');
+      setScanning(false);
+      return;
+    }
+
+    const found = new Map();
+
     try {
-      const ok = await requestPermissions();
-      if (!ok) { Alert.alert('Cần quyền Bluetooth'); setScanning(false); return; }
-      const devices = await RNBluetooth.getBondedDevices();
-      setPairedDevices(devices || []);
-      addLog(`Tìm thấy ${devices?.length||0} thiết bị đã pair`);
-    } catch(e) {
+      BleManager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
+        if (error) {
+          addLog(`Scan lỗi: ${error.message}`);
+          setScanning(false);
+          return;
+        }
+        if (device && device.name) {
+          if (!found.has(device.id)) {
+            found.set(device.id, device);
+            setScannedDevices(Array.from(found.values()));
+          }
+        }
+      });
+
+      // Tự dừng sau 10 giây
+      scanSub.current = setTimeout(() => {
+        BleManager.stopDeviceScan();
+        setScanning(false);
+        addLog(`Tìm thấy ${found.size} thiết bị BLE`);
+      }, 10000);
+    } catch (e) {
       addLog(`Lỗi scan: ${e.message}`);
-    } finally { setScanning(false); }
+      setScanning(false);
+    }
   }, [addLog]);
 
-  // ── Connect ─────────────────────────────────────────────────────
+  const stopScan = useCallback(() => {
+    if (BleManager) BleManager.stopDeviceScan();
+    if (scanSub.current) clearTimeout(scanSub.current);
+    setScanning(false);
+  }, []);
+
+  // ── Connect ──────────────────────────────────────────────────
   const connectDevice = useCallback(async (device) => {
-    addLog(`Đang kết nối ${device.name}...`);
-    if (!RNBluetooth) {
-      // Demo mode only — no fake ACK for OTA
+    stopScan();
+    addLog(`Đang kết nối BLE: ${device.name}...`);
+
+    if (!BleManager) {
+      // Demo mode
       setTimeout(() => {
+        bleDevice.current = { _demo: true, id: device.id };
         setConnectedDevice(device);
         setConnected(true);
         addLog(`✓ Demo: ${device.name}`);
-        btDevice.current = { _demo: true };
       }, 800);
       return true;
     }
+
     try {
-      // Connect with no delimiter — we handle framing manually
-      // NO delimiter — we handle framing manually
-      // Using delimiter:'\n' would block ACK bytes (0x79) since they have no newline
-      const dev = await RNBluetooth.connectToDevice(device.address, {
-        delimiter: '',  // empty = callback fires for every chunk, no buffering
+      const dev = await BleManager.connectToDevice(device.id, {
+        autoConnect: false,
+        requestMTU: 512,
       });
-      btDevice.current = dev;
+
+      await dev.discoverAllServicesAndCharacteristics();
+      bleDevice.current = dev;
       setConnectedDevice(device);
       setConnected(true);
-      addLog(`✓ Kết nối: ${device.name}`);
+      addLog(`✓ Kết nối BLE: ${device.name}`);
 
-      // Single subscription — pass full evt for format detection
-      readSub.current = dev.onDataReceived((evt) => {
-        // Pass evt.data — but also log full evt for debugging
-        handleIncomingData(evt?.data ?? evt ?? '');
+      // Subscribe notifications (FFF1)
+      notifySub.current = dev.monitorCharacteristicForService(
+        SERVICE_UUID, NOTIFY_UUID,
+        (error, characteristic) => {
+          if (error) {
+            if (error.errorCode !== 205) { // 205 = subscription cancelled (normal on disconnect)
+              addLog(`Notify lỗi: ${error.message}`);
+            }
+            return;
+          }
+          if (characteristic?.value) {
+            handleIncomingData(characteristic.value);
+          }
+        }
+      );
+
+      // Monitor disconnect
+      disconnectSub.current = dev.onDisconnected((error) => {
+        addLog('BLE ngắt kết nối');
+        setConnected(false);
+        setConnectedDevice(null);
+        bleDevice.current = null;
+        notifySub.current?.remove();
+        notifySub.current = null;
       });
 
-      // Request device info after connect
+      // Request device info
       setTimeout(() => {
         sendCmdRaw('$APP_READ,INFOR_G1\r\n');
         sendCmdRaw('$APP_READ,INFOR_G2\r\n');
-      }, 600);
+      }, 800);
+
       return true;
-    } catch(e) {
-      addLog(`✗ Lỗi kết nối: ${e.message}`);
-      Alert.alert('Lỗi kết nối', e.message);
+    } catch (e) {
+      addLog(`✗ Lỗi kết nối BLE: ${e.message}`);
+      Alert.alert('Lỗi kết nối BLE', e.message);
+      setConnected(false);
       return false;
     }
-  }, [addLog, handleIncomingData]);
+  }, [addLog, handleIncomingData, stopScan]);
 
-  // ── Disconnect ──────────────────────────────────────────────────
-  // silent=true: chỉ ngắt vật lý, giữ connectedDevice để OTA có thể reconnect
+  // ── Disconnect ───────────────────────────────────────────────
   const disconnectDevice = useCallback(async (silent = false) => {
     rawByteListener.current = null;
-    if (readSub.current) { readSub.current.remove?.(); readSub.current = null; }
-    if (btDevice.current?._sim) clearInterval(btDevice.current._sim);
-    if (RNBluetooth && connectedDevice) {
-      try { await RNBluetooth.disconnectFromDevice(connectedDevice.address); } catch {}
+    notifySub.current?.remove();
+    notifySub.current = null;
+    disconnectSub.current?.remove();
+    disconnectSub.current = null;
+
+    if (BleManager && bleDevice.current && !bleDevice.current._demo) {
+      try { await BleManager.cancelDeviceConnection(bleDevice.current.id); } catch {}
     }
-    btDevice.current = null;
+    bleDevice.current = null;
+
     if (!silent) {
       setConnected(false);
       setConnectedDevice(null);
       setBmsData({ voltage:0, capacity:0, current:0, wattage:0, temperature:0 });
       setDriverData({ voltage:0, current:0, wattage:0, throttle:0, temperature:0 });
       setInforData({ firmware:'--', serial:'--', device:'--', odometer:0, mode:'--', error:'' });
-      addLog('Đã ngắt kết nối');
+      addLog('Đã ngắt kết nối BLE');
     } else {
       addLog('Ngắt kết nối tạm (OTA)...');
     }
   }, [connectedDevice, addLog]);
 
-  // ── Connect OTA at 38400 baud ────────────────────────────────────
+  // ── Reconnect for OTA ────────────────────────────────────────
   const connectDeviceOta = useCallback(async (device) => {
     if (!device) { addLog('✗ OTA: không có device'); return false; }
-    addLog(`Reconnect OTA: ${device.name}...`);
-    if (!RNBluetooth || btDevice.current?._demo) {
-      addLog('Demo OTA OK'); setConnected(true);
-      btDevice.current = { _demo: true }; return true;
-    }
-    try {
-      // Baud rate 38400 được cấu hình trên HC-05 bằng AT command.
-      // react-native-bluetooth-classic không có option baudRate.
-      // Ta reconnect với delimiter='' để nhận raw bytes từ bootloader.
-      const dev = await RNBluetooth.connectToDevice(device.address, { delimiter: '' });
-      btDevice.current = dev;
+    addLog(`Reconnect OTA BLE: ${device.name}...`);
+
+    if (!BleManager || bleDevice.current?._demo) {
+      addLog('Demo OTA OK');
       setConnected(true);
-      addLog(`✓ OTA connected: ${device.name}`);
-      readSub.current = dev.onDataReceived((evt) => {
-        handleIncomingData(evt?.data ?? evt ?? '');
-      });
+      bleDevice.current = { _demo: true, id: device.id };
       return true;
-    } catch(e) {
-      addLog(`✗ OTA connect lỗi: ${e.message}`);
-      setConnected(false); return false;
+    }
+
+    try {
+      const dev = await BleManager.connectToDevice(device.id, { requestMTU: 512 });
+      await dev.discoverAllServicesAndCharacteristics();
+      bleDevice.current = dev;
+      setConnected(true);
+      addLog(`✓ OTA BLE connected: ${device.name}`);
+
+      notifySub.current = dev.monitorCharacteristicForService(
+        SERVICE_UUID, NOTIFY_UUID,
+        (error, characteristic) => {
+          if (error) return;
+          if (characteristic?.value) handleIncomingData(characteristic.value);
+        }
+      );
+      return true;
+    } catch (e) {
+      addLog(`✗ OTA BLE lỗi: ${e.message}`);
+      setConnected(false);
+      return false;
     }
   }, [addLog, handleIncomingData]);
 
-  // ── Send raw text string (normal commands) ──────────────────────
+  // ── Write text string via BLE (FFF2) ─────────────────────────
   const sendCmdRaw = useCallback(async (frame) => {
-    if (!RNBluetooth || !btDevice.current || !connected) return;
-    try { await RNBluetooth.writeToDevice(connectedDevice.address, frame); }
-    catch(e) { addLog(`✗ TX lỗi: ${e.message}`); }
-  }, [connected, connectedDevice, addLog]);
+    if (!bleDevice.current || !connected) return;
+    if (bleDevice.current._demo) return; // demo: ignore
 
-  // ── Send raw bytes for OTA ──────────────────────────────────────
-  // react-native-bluetooth-classic writeToDevice accepts a string
-  // We convert each byte → char and send as binary string
+    try {
+      // Convert string → base64
+      const bytes = new Uint8Array(frame.length);
+      for (let i = 0; i < frame.length; i++) bytes[i] = frame.charCodeAt(i);
+      const b64 = bytesToBase64(bytes);
+
+      await BleManager.writeCharacteristicWithResponseForDevice(
+        bleDevice.current.id,
+        SERVICE_UUID,
+        WRITE_UUID,
+        b64
+      );
+    } catch (e) {
+      addLog(`✗ BLE TX lỗi: ${e.message}`);
+    }
+  }, [connected, addLog]);
+
+  // ── Send raw bytes for OTA ───────────────────────────────────
   const sendRawBytes = useCallback(async (uint8Array) => {
     if (!connected) { addLog('✗ sendRawBytes: chưa kết nối'); return false; }
-
-    if (!RNBluetooth || !btDevice.current || btDevice.current._demo) {
-      // Demo mode — just log, no fake ACK
+    if (!BleManager || bleDevice.current?._demo) {
       addLog(`TX bytes(demo): ${Array.from(uint8Array).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ')}`);
       return true;
     }
-
     try {
-      // Convert Uint8Array → binary string (char per byte)
-      // This is the correct way to send raw bytes via RNBluetoothClassic
-      let binaryStr = '';
-      uint8Array.forEach(b => { binaryStr += String.fromCharCode(b); });
-      await RNBluetooth.writeToDevice(connectedDevice.address, binaryStr);
+      const b64 = bytesToBase64(uint8Array);
+      await BleManager.writeCharacteristicWithoutResponseForDevice(
+        bleDevice.current.id,
+        SERVICE_UUID,
+        WRITE_UUID,
+        b64
+      );
       return true;
-    } catch(e) {
+    } catch (e) {
       addLog(`✗ sendRawBytes lỗi: ${e.message}`);
       return false;
     }
-  }, [connected, connectedDevice, addLog]);
+  }, [connected, addLog]);
 
-  // ── Public text command ─────────────────────────────────────────
+  // ── Public commands ──────────────────────────────────────────
   const sendCommand = useCallback(async (frame) => {
     addLog(`TX: ${frame}`);
     await sendCmdRaw(frame + '\r\n');
@@ -277,11 +383,15 @@ export function BluetoothProvider({ children }) {
   return (
     <BluetoothContext.Provider value={{
       isEnabled, connected, connectedDevice, scanning,
-      pairedDevices, log,
+      pairedDevices: scannedDevices,  // giữ tên cũ để không đổi các screen khác
+      scannedDevices, log,
       bmsData, driverData, motorData, inforData, signals,
-      connectDevice, disconnectDevice, connectDeviceOta, scanPairedDevices,
+      connectDevice, disconnectDevice, connectDeviceOta,
+      scanPairedDevices, stopScan,
       sendCommand, sendRawBytes, writeParam, readParam,
       setRawByteListener,
+      // Expose UUIDs cho debug
+      SERVICE_UUID, WRITE_UUID, NOTIFY_UUID,
     }}>
       {children}
     </BluetoothContext.Provider>
